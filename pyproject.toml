@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=72"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "rag-ipardes"
+version = "0.1.0"
+description = "API de chat baseada em RAG sobre documentos do IPARDES"
+requires-python = ">=3.13"
+
+# Dependências estão no requirements.txt.
+# Torch é instalado separadamente com índice CUDA antes do pip install -r requirements.txt.
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["indexing*", "retrieval*", "api*", "ui*", "tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

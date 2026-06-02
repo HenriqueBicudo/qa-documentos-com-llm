@@ -1,0 +1,54 @@
+# ============================================================
+# RAG Pipeline — Trabalho 2 — Aprendizado de Máquina
+# Prof. Mozart Hasse
+#
+# ATENÇÃO: instale o PyTorch ANTES deste arquivo:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#
+# Depois:
+#   pip install -r requirements.txt
+# ============================================================
+
+# --- Extração de PDF ---
+pymupdf>=1.25.0          # PyMuPDF (fitz) — wheel pronto para Python 3.13
+pdfplumber>=0.11.0       # localização de tabelas e extração de texto
+camelot-py[cv]>=0.11.0  # extração precisa de tabelas (requer Ghostscript no sistema)
+# Instalar Ghostscript antes: https://www.ghostscript.com/download/gsdnld.html
+
+# --- Pré-processamento de texto ---
+spacy>=3.8.0             # NLP em português (Python 3.13 requer 3.8+)
+nltk>=3.9.0
+unicodedata2>=15.1.0
+
+# --- Chunking ---
+langchain-text-splitters>=0.3.0
+
+# --- Embeddings ---
+sentence-transformers>=3.3.0
+transformers>=4.47.0
+huggingface-hub>=0.27.0
+
+# --- Vector Store ---
+chromadb>=0.6.0
+
+# --- Numpy ---
+numpy>=2.0.0             # numpy 2.x é o padrão para Python 3.13
+
+# --- API ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# --- Interface ---
+streamlit>=1.40.0
+
+# --- Validação ---
+pydantic>=2.0.0
+
+# --- Testes ---
+pytest>=8.3.0
+pytest-cov>=6.0.0
+
+# --- Utilitários ---
+python-dotenv>=1.0.0
+tqdm>=4.67.0
+requests>=2.32.0

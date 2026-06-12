@@ -1,29 +1,45 @@
 """
-ingestion/ingestor.py — Carregamento e estruturação dos documentos PDF
+ingestion/ingestor.py — Carregamento e estruturação dos documentos PDF via Docling
 
-O PDFLoader é a peça central da ingestão. Para cada página de um PDF ele:
-    1. Extrai as tabelas com TableExtractor (pdfplumber + camelot)
-    2. Filtra o texto removendo as áreas onde ficam as tabelas — assim
-       texto e tabelas ficam separados e limpos, sem duplicação
-    3. Retorna um RawDocument por página, com texto e tabelas distintos
+─── Histórico de versões ─────────────────────────────────────────────────────
 
-Isso é importante pro RAG: o texto corrido vai pro chunker, e as tabelas
-ficam indexadas separadamente com seus dados estruturados.
+Versão 1 — pdfplumber + camelot:
+    Extração manual combinando dois sistemas de coordenadas diferentes
+    (pdfplumber mede de cima pra baixo, camelot de baixo pra cima).
+    Requeria Ghostscript instalado no sistema operacional.
+    Localizava tabelas por marcadores textuais "TABELA N" / "FONTE".
+    Código espalhado em ~350 linhas entre ingestor.py e table_extractor.py.
+
+Versão atual — Docling (IBM, 2024):
+    A biblioteca usa modelos ML internos para entender o layout do documento,
+    separar texto de tabelas e exportar tudo de forma estruturada.
+    Sem Ghostscript. Tabelas chegam prontas em markdown. Código em ~60 linhas.
+    Instalação: pip install docling
+
+─── Funcionamento ────────────────────────────────────────────────────────────
+
+Para cada PDF o Docling:
+    1. Analisa o layout de cada página com modelos de visão computacional
+    2. Separa blocos de texto de tabelas automaticamente
+    3. Exporta cada tabela em markdown (pronto para embedding)
+
+Retorna um RawDocument por página com:
+    - content: texto corrido (sem as tabelas)
+    - tables:  lista de strings markdown, uma por tabela da página
 """
 
-from ingestion.table_extractor import TableExtractor
-
-from typing      import List
-from pathlib     import Path
 from dataclasses import dataclass, field
+from pathlib     import Path
+from typing      import List
+from collections import defaultdict
 
-from config.logger   import get_logger
-from pdfplumber.page import Page
+from docling.datamodel.base_models      import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter         import DocumentConverter, PdfFormatOption
+from docling.backend.pypdfium2_backend  import PyPdfiumDocumentBackend
+from config.logger                      import get_logger
 
 logger = get_logger(__name__)
-
-# Alias: uma tabela bruta é uma lista de linhas, cada linha é uma lista de células
-TableData = List[List[str | None]]
 
 
 @dataclass
@@ -35,21 +51,21 @@ class RawDocument:
         page:        número da página (começa em 1)
         total_pages: total de páginas do documento
         source:      caminho do arquivo PDF de origem
-        content:     texto corrido da página (sem as áreas de tabela)
-        tables:      lista de tabelas extraídas da página (dados brutos)
-        metadata:    dicionário livre para metadados extras (ex: nome do doc)
+        content:     texto corrido da página (sem tabelas)
+        tables:      lista de tabelas em formato markdown
+        metadata:    dicionário livre para metadados extras
     """
     page       : int
     total_pages: int
     source     : str
     content    : str
-    tables     : List[TableData] = field(default_factory=list)
-    metadata   : dict            = field(default_factory=dict)
+    tables     : List[str] = field(default_factory=list)
+    metadata   : dict      = field(default_factory=dict)
 
 
 class PDFLoader:
     """
-    Carrega um PDF e retorna uma lista de RawDocuments (um por página).
+    Carrega um PDF via Docling e retorna uma lista de RawDocuments (um por página).
 
     Uso:
         loader = PDFLoader("arquivo.pdf")
@@ -59,104 +75,60 @@ class PDFLoader:
     def __init__(self, pdf_path: str | Path):
         self.path = Path(pdf_path)
 
-    def _group_tables_by_page(
-        self,
-        extractor: TableExtractor,
-    ) -> dict[int, list[TableData]]:
-        """
-        Extrai todas as tabelas do PDF e as organiza por número de página.
-
-        Retorna um dict: {numero_pagina: [tabela1, tabela2, ...]}
-        """
-        tables_per_page: dict[int, list[TableData]] = {}
-
-        for table in extractor.extract_all_tables():
-            if table.page is None:
-                continue
-
-            tables_per_page.setdefault(table.page, []).append(table.data)
-
-        return tables_per_page
-
-    def _build_document(
-        self,
-        page           : Page,
-        total_pages    : int,
-        tables_per_page: dict[int, list[TableData]],
-        extractor      : TableExtractor,
-    ) -> RawDocument | None:
-        """
-        Constrói um RawDocument para uma página.
-
-        O ponto chave aqui é o filtro de texto: antes de extrair o texto
-        corrido, a função calcula as bounding boxes das tabelas na página
-        e filtra os objetos de texto que estão dentro dessas áreas.
-
-        Isso garante que o campo `content` não contenha texto de tabelas,
-        evitando duplicação quando ambos forem indexados no RAG.
-
-        Retorna None se a página não tiver nem texto nem tabelas.
-        """
-        table_areas = extractor._build_table_areas(page.page_number)
-        tables      = tables_per_page.get(page.page_number, [])
-        height      = page.height
-
-        # Converte as áreas do formato camelot (y de baixo pra cima)
-        # de volta pro formato pdfplumber (top de cima pra baixo)
-        if table_areas:
-            bboxes = []
-            for area in table_areas:
-                x1, y1, x2, y2 = map(float, area.split(","))
-                bboxes.append((x1, height - y2, x2, height - y1))
-        else:
-            # Fallback: usa as bboxes detectadas automaticamente pelo pdfplumber
-            bboxes = [table.bbox for table in page.find_tables()]
-
-        # Filtra os objetos de texto que estão dentro das áreas de tabela
-        filtered_page = page.filter(
-            lambda obj: not any(
-                obj["x0"]    >= bbox[0] and obj["x1"]     <= bbox[2] and
-                obj["top"]   >= bbox[1] and obj["bottom"] <= bbox[3]
-                for bbox in bboxes
-            )
-        )
-
-        text = (filtered_page.extract_text() or "").strip()
-
-        # Descarta páginas completamente vazias
-        if not text and not tables:
-            return None
-
-        return RawDocument(
-            page        = page.page_number,
-            total_pages = total_pages,
-            source      = str(self.path),
-            content     = text,
-            tables      = tables,
+        # Backend PyPdfium2: extrai texto direto da estrutura do PDF sem
+        # renderizar páginas como imagens — evita o std::bad_alloc que o
+        # backend padrão (docling-parse) causava ao processar documentos
+        # grandes (falhava a partir da página 17, perdendo ~80% do conteúdo).
+        pipeline_options = PdfPipelineOptions(do_ocr=False)
+        self._converter  = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(
+                    pipeline_options = pipeline_options,
+                    backend          = PyPdfiumDocumentBackend,
+                )
+            }
         )
 
     def load(self) -> list[RawDocument]:
         """
-        Abre o PDF, extrai texto e tabelas por página e retorna
-        a lista de RawDocuments prontos para o pipeline de chunking.
+        Converte o PDF e agrupa texto e tabelas por página.
         """
         logger.info(f"Carregando PDF: {self.path.name}")
+
+        doc = self._converter.convert(str(self.path)).document
+
+        # Agrupamento por página
+        pages_text  : dict[int, list[str]] = defaultdict(list)
+        pages_tables: dict[int, list[str]] = defaultdict(list)
+
+        for item in doc.texts:
+            if item.prov and item.text.strip():
+                pages_text[item.prov[0].page_no].append(item.text)
+
+        for table in doc.tables:
+            if table.prov:
+                md = table.export_to_markdown(doc)
+                if md.strip():
+                    pages_tables[table.prov[0].page_no].append(md)
+
+        all_pages   = set(pages_text.keys()) | set(pages_tables.keys())
+        total_pages = max(all_pages) if all_pages else 0
+
         documents: list[RawDocument] = []
+        for page_no in sorted(all_pages):
+            content = "\n".join(pages_text.get(page_no, []))
+            tables  = pages_tables.get(page_no, [])
 
-        with TableExtractor(self.path) as extractor:
-            tables_per_page = self._group_tables_by_page(extractor)
-            total_pages     = len(extractor.pdf.pages)
+            if not content.strip() and not tables:
+                continue
 
-            for page in extractor.pdf.pages:
-                document = self._build_document(
-                    page,
-                    total_pages,
-                    tables_per_page,
-                    extractor,
-                )
-
-                if document:
-                    documents.append(document)
+            documents.append(RawDocument(
+                page        = page_no,
+                total_pages = total_pages,
+                source      = str(self.path),
+                content     = content,
+                tables      = tables,
+            ))
 
         logger.info(f"  → {len(documents)} páginas carregadas")
         return documents

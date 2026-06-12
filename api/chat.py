@@ -6,8 +6,18 @@ duas saídas obrigatórias (exigência do professor):
     - debug:    prompt montado + chunks usados (para avaliação)
     - resposta: texto final gerado pela LLM
 
-Execute (CUDA_VISIBLE_DEVICES vazio pra deixar GPU livre pro Ollama):
-    $env:CUDA_VISIBLE_DEVICES=""; uvicorn api.chat:app
+Execute:
+    uvicorn api.chat:app
+
+Nota sobre GPU: o CUDA_VISIBLE_DEVICES="" original foi removido.
+Era necessário em GPUs com pouca VRAM para forçar os modelos de embedding
+e reranker na CPU, liberando VRAM para o Ollama. Com 8GB de VRAM (RTX 4060 Ti)
+todos os modelos cabem na GPU simultaneamente:
+    e5-large:       ~1.1 GB
+    cross-encoder:  ~0.2 GB
+    qwen3:8b:       ~5.2 GB
+    ─────────────────────────
+    Total:          ~6.5 GB → cabe nos 8 GB disponíveis
 """
 
 from fastapi         import FastAPI
@@ -47,6 +57,7 @@ class ChunkInfo(BaseModel):
     pagina: int
     score : float
     trecho: str
+    tipo  : str = "texto"
 
 
 class ChatResponse(BaseModel):
@@ -71,7 +82,7 @@ def chat(request: PerguntaRequest):
     Saídas:
         chunks_usados: trechos recuperados do ChromaDB com doc, página e score
         prompt_final:  prompt completo enviado à LLM (para avaliação)
-        resposta:      texto final gerado pelo Qwen2.5:7b-instruct
+        resposta:      texto final gerado pelo qwen3:8b
     """
     logger.info(f"POST /chat — pergunta: {request.pergunta}")
     resultado = gerador.responder(request.pergunta)
@@ -84,6 +95,7 @@ def chat(request: PerguntaRequest):
                 pagina = c.pagina,
                 score  = c.score,
                 trecho = c.texto,
+                tipo   = c.tipo,
             )
             for c in resultado.chunks_usados
         ],

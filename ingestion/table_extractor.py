@@ -1,6 +1,33 @@
 """
 ingestion/table_extractor.py — Localização e extração de tabelas dos PDFs
 
+⚠️  DEPRECADO — substituído pelo Docling em ingestion/ingestor.py
+
+Este arquivo é mantido apenas para documentar a abordagem anterior.
+Não é mais importado por nenhum módulo do pipeline.
+
+─── Por que foi substituído ──────────────────────────────────────────────────
+
+Esta implementação combinava pdfplumber + camelot para extrair tabelas:
+    - pdfplumber localizava as tabelas por marcadores textuais ("TABELA N")
+    - camelot extraía o conteúdo usando as coordenadas calculadas
+    - A conversão entre os dois sistemas de coordenadas era manual e frágil
+    - Requeria Ghostscript instalado no sistema — dependência externa complicada
+
+Problemas observados:
+    - Tabelas sem marcador "TABELA N" não eram detectadas
+    - Conversão de coordenadas entre pdfplumber (top-down) e camelot
+      (bottom-up) gerava erros em páginas com layout incomum
+    - Ghostscript causava falha de instalação em ambientes sem ele
+
+─── O que o Docling faz diferente ───────────────────────────────────────────
+
+O Docling usa modelos ML de visão computacional para entender o layout,
+eliminando a necessidade de marcadores textuais ou conversão manual de
+coordenadas. Tabelas são detectadas e exportadas em markdown automaticamente.
+
+─── Referência ───────────────────────────────────────────────────────────────
+
 Combina duas ferramentas:
     - pdfplumber: localiza onde as tabelas estão na página, usando os
       marcadores textuais "TABELA N" (início) e "FONTE" (fim).

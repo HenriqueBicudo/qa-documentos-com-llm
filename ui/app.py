@@ -49,7 +49,7 @@ if pergunta:
     with st.chat_message("assistant"):
         with st.spinner("Buscando nos documentos..."):
             try:
-                response = requests.post(API_URL, json={"pergunta": pergunta}, timeout=120)
+                response = requests.post(API_URL, json={"pergunta": pergunta}, timeout=360)
                 response.raise_for_status()
                 data = response.json()
 
@@ -67,8 +67,9 @@ if pergunta:
                     if chunks:
                         st.subheader("Trechos recuperados")
                         for i, chunk in enumerate(chunks, 1):
+                            tipo_label = "Tabela" if chunk.get("tipo") == "tabela" else "Texto"
                             st.markdown(
-                                f"**[{i}] {chunk['doc']} — página {chunk['pagina']} "
+                                f"**[{i}] [{tipo_label}] {chunk['doc']} — página {chunk['pagina']} "
                                 f"(score: {chunk['score']})**"
                             )
                             st.text(chunk["trecho"][:400] + "..." if len(chunk["trecho"]) > 400 else chunk["trecho"])

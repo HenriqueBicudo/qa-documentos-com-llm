@@ -7,6 +7,28 @@ Dado uma pergunta do usuário:
     3. Aplica threshold mínimo de similaridade — chunks muito distantes são descartados
     4. Retorna os chunks encontrados com seus metadados (doc, página, score)
 
+─── Histórico de ajustes de parâmetros ───────────────────────────────────────
+
+SIMILARITY_THRESHOLD:
+    Tentativa 1 — 0.40: ponto de partida recomendado. Funcionou bem na maioria
+        das perguntas, mas uma pergunta fora do escopo retornou um chunk com
+        score 0.45, ou seja, passou pelo filtro e foi enviada à LLM.
+    Tentativa 2 — 0.90: subimos para evitar respostas irrelevantes. Funcionou
+        para perguntas simples, mas causou um bug crítico: perguntas que cobrem
+        dois ou mais PDFs não retornavam nenhum chunk, porque os chunks de cada
+        documento individualmente ficavam abaixo de 0.90. A LLM respondia
+        "fora do escopo" mesmo tendo a informação nos documentos.
+    Valor atual — 0.55: compromisso entre os dois extremos. O threshold de
+        cosseno é apenas um pré-filtro grosseiro; a filtragem fina ficou por
+        conta do cross-encoder (reranker), que descarta chunks com score <= 0
+        e é muito mais preciso para julgar relevância.
+
+TOP_K:
+    Tentativa 1 — 7: suficiente para perguntas de documento único.
+    Valor atual — 12: aumentado junto com a redução do threshold para garantir
+        que perguntas multi-documento pesquem candidatos de 2+ PDFs antes do
+        reranking reduzir para os 3 melhores.
+
 Execute para testar:
     python -m retrieval.search
 """
@@ -27,17 +49,19 @@ CHROMA_DIR      = Path(__file__).parent.parent / "chroma_db"
 COLLECTION_NAME = "ipardes_rag"
 MODELO_EMBEDDING = "intfloat/multilingual-e5-large"
 
-# Mesma coisa do embed.py — usa GPU se disponível, senão CPU - Perguntar pro professor se GPU é permitida e se usamos CUDA (NVIDIA) ou ROCm (AMD)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Quantos chunks retornar na busca inicial
-TOP_K = 7
+# Quantos chunks retornar na busca inicial — aumentado para cobrir perguntas
+# que abrangem múltiplos documentos (mais candidatos antes do reranking)
+TOP_K = 12
 
-# Score mínimo de similaridade (0 a 1) — abaixo disso descarta o chunk
-# 1.0 = idêntico, 0.0 = sem relação. 0.4 é um bom ponto de partida.
-# Primeiro teste foi com 0.4 mas das 5 respostas 1 veio estranha, ent inseri 5 perguntas para ver se o resultado melhora, e se não melhorar podemos ajustar esse threshold.
-# ATT: Em mais perguntas o Modelo performou bem, mas a pergunta sem relação ao assunto ele respondeu com um chunk que tinha score 0.45, ou seja, acima do threshold, então talvez seja necessário aumentar o threshold pra evitar esse tipo de resposta irrelevante.
-SIMILARITY_THRESHOLD = 0.90
+# Score mínimo de similaridade de cosseno — serve apenas como pré-filtro grosseiro
+# para descartar chunks completamente aleatórios antes do cross-encoder.
+# O reranker (cross-encoder) é quem faz a filtragem fina: já descarta tudo com
+# score <= 0, que é um guardião muito mais preciso do que este threshold.
+# 0.90 era alto demais: descartava chunks relevantes de documentos secundários
+# em perguntas que abrangem 2+ PDFs.
+SIMILARITY_THRESHOLD = 0.55
 
 @dataclass
 class ResultadoBusca:
@@ -49,11 +73,13 @@ class ResultadoBusca:
         pagina:     número da página de origem
         texto:      conteúdo do chunk
         score:      similaridade de cosseno com a pergunta (0 a 1)
+        tipo:       "texto" para parágrafos, "tabela" para dados tabulares
     """
     doc   : str
     pagina: int
     texto : str
     score : float
+    tipo  : str = "texto"
 
 
 class BuscadorRAG:
@@ -115,6 +141,7 @@ class BuscadorRAG:
                 pagina= meta["pagina"],
                 texto = texto,
                 score = round(score, 4),
+                tipo  = meta.get("tipo", "texto"),
             ))
 
         return chunks
@@ -122,6 +149,10 @@ class BuscadorRAG:
 
 if __name__ == "__main__":
     # Teste rápido da busca
+    # Bug corrigido: o bloco de impressão dos resultados estava num `else` do
+    # for externo (for-else do Python), não do if interno. Isso fazia o último
+    # resultado ser impresso duas vezes após o loop terminar. Corrigido movendo
+    # a impressão para dentro do else correto (o do `if not resultados`).
     buscador = BuscadorRAG()
     perguntas = [
         "Qual foi o crescimento do PIB do Paraná?",
@@ -141,9 +172,5 @@ if __name__ == "__main__":
         else:
             for i, r in enumerate(resultados, 1):
                 print(f"[{i}] {r.doc} — página {r.pagina} — score {r.score}")
-                print(f"    {r.texto[:150]}...")
-    else:
-        for i, r in enumerate(resultados, 1):
-            print(f"[{i}] {r.doc} — página {r.pagina} — score {r.score}")
-            print(f"    {r.texto[:200]}...")
-            print()
+                print(f"    {r.texto[:200]}...")
+                print()

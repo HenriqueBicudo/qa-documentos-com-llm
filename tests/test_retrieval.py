@@ -9,13 +9,11 @@ Verifica:
     - Precision@k para perguntas conhecidas
 
 NOTA: Carrega os modelos de embedding — mais lento que os outros testes.
-      CUDA_VISIBLE_DEVICES="" garante que não conflite com o Ollama.
+      Os modelos de embedding e o Ollama cabem juntos na VRAM (RTX 4060 Ti 8 GB),
+      portanto não é necessário forçar CPU via CUDA_VISIBLE_DEVICES.
 """
 
-import os
 import pytest
-
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 from retrieval.search   import BuscadorRAG, SIMILARITY_THRESHOLD, TOP_K
 from retrieval.reranker import RerankadorRAG, TOP_K_RERANKED
@@ -102,30 +100,42 @@ def test_busca_educacao_parana(buscador):
 
 
 # ── Testes de fora do escopo (críticos) ───────────────────────────────────────
+#
+# Testam o pipeline completo (buscador + rerankador), não só o buscador.
+# Motivo: SIMILARITY_THRESHOLD é um pré-filtro permissivo — sua função é
+# reduzir candidatos para o cross-encoder, não garantir relevância sozinho.
+# A porta de qualidade final é o reranker (score > 0 do cross-encoder).
+# Queries fora do escopo podem passar pelo threshold (especialmente com tabelas
+# de baixa densidade), mas o cross-encoder as descarta com score negativo.
 
-def test_fora_escopo_capital_franca(buscador):
-    """Capital da França → lista vazia (fora do escopo)."""
-    assert buscador.buscar("Qual é a capital da França?") == []
-
-
-def test_fora_escopo_futebol(buscador):
-    """Futebol → lista vazia."""
-    assert buscador.buscar("Quem ganhou o campeonato brasileiro de futebol?") == []
-
-
-def test_fora_escopo_presidente_brasil(buscador):
-    """Quem é o presidente → lista vazia (político, sem relação com IPARDES)."""
-    assert buscador.buscar("Quem é o presidente do Brasil atualmente?") == []
+def test_fora_escopo_capital_franca(buscador, rerankador):
+    """Capital da França → lista vazia após reranking (fora do escopo)."""
+    chunks = buscador.buscar("Qual é a capital da França?")
+    assert rerankador.rerankear("Qual é a capital da França?", chunks) == []
 
 
-def test_fora_escopo_receita_culinaria(buscador):
-    """Receita culinária → lista vazia."""
-    assert buscador.buscar("Como fazer bolo de chocolate?") == []
+def test_fora_escopo_futebol(buscador, rerankador):
+    """Futebol → lista vazia após reranking."""
+    chunks = buscador.buscar("Quem ganhou o campeonato brasileiro de futebol?")
+    assert rerankador.rerankear("Quem ganhou o campeonato brasileiro de futebol?", chunks) == []
 
 
-def test_fora_escopo_historia_mundial(buscador):
-    """Segunda Guerra Mundial → lista vazia."""
-    assert buscador.buscar("Quando terminou a Segunda Guerra Mundial?") == []
+def test_fora_escopo_presidente_brasil(buscador, rerankador):
+    """Quem é o presidente → lista vazia após reranking."""
+    chunks = buscador.buscar("Quem é o presidente do Brasil atualmente?")
+    assert rerankador.rerankear("Quem é o presidente do Brasil atualmente?", chunks) == []
+
+
+def test_fora_escopo_receita_culinaria(buscador, rerankador):
+    """Receita culinária → lista vazia após reranking."""
+    chunks = buscador.buscar("Como fazer bolo de chocolate?")
+    assert rerankador.rerankear("Como fazer bolo de chocolate?", chunks) == []
+
+
+def test_fora_escopo_historia_mundial(buscador, rerankador):
+    """Segunda Guerra Mundial → lista vazia após reranking."""
+    chunks = buscador.buscar("Quando terminou a Segunda Guerra Mundial?")
+    assert rerankador.rerankear("Quando terminou a Segunda Guerra Mundial?", chunks) == []
 
 
 # ── Testes de scores e threshold ─────────────────────────────────────────────
@@ -167,10 +177,13 @@ def test_resultado_tem_campos_obrigatorios(buscador):
 
 def test_threshold_config_razoavel():
     """
-    SIMILARITY_THRESHOLD deve estar entre 0.7 e 0.99.
-    Muito baixo = aceita lixo; muito alto = rejeita respostas válidas.
+    SIMILARITY_THRESHOLD deve estar entre 0.4 e 0.75.
+    É apenas um pré-filtro grosseiro — o cross-encoder faz a filtragem fina.
+    Muito baixo (< 0.4) = passa ruído demais pro reranker.
+    Muito alto (> 0.75) = descarta chunks relevantes de documentos secundários
+    em perguntas que abrangem múltiplos PDFs.
     """
-    assert 0.7 <= SIMILARITY_THRESHOLD <= 0.99, (
+    assert 0.4 <= SIMILARITY_THRESHOLD <= 0.75, (
         f"SIMILARITY_THRESHOLD fora do intervalo razoável: {SIMILARITY_THRESHOLD}"
     )
 

@@ -2,23 +2,19 @@
 # RAG Pipeline — Trabalho 2 — Aprendizado de Máquina
 # Prof. Mozart Hasse
 #
-# ATENÇÃO: instale o PyTorch ANTES deste arquivo:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# ATENÇÃO: instale o PyTorch ANTES deste arquivo com a URL do seu CUDA (veja nvidia-smi):
+#   CUDA 12.8: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   CUDA 12.4: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#   CUDA 12.1: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 #
 # Depois:
 #   pip install -r requirements.txt
 # ============================================================
 
 # --- Extração de PDF ---
-pymupdf>=1.25.0          # PyMuPDF (fitz) — wheel pronto para Python 3.13
-pdfplumber>=0.11.0       # localização de tabelas e extração de texto
-camelot-py[cv]>=0.11.0  # extração precisa de tabelas (requer Ghostscript no sistema)
-# Instalar Ghostscript antes: https://www.ghostscript.com/download/gsdnld.html
-
-# --- Pré-processamento de texto ---
-spacy>=3.8.0             # NLP em português (Python 3.13 requer 3.8+)
-nltk>=3.9.0
-unicodedata2>=15.1.0
+# Versão 1: pdfplumber + camelot-py[cv] (requeria Ghostscript no sistema)
+# Versão atual: Docling — extração de texto e tabelas via modelos ML, sem Ghostscript
+docling>=2.0.0           # extração de PDF com layout ML (texto + tabelas em markdown)
 
 # --- Chunking ---
 langchain-text-splitters>=0.3.0

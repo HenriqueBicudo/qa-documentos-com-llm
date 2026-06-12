@@ -4,10 +4,31 @@ api/generator.py — Geração de respostas via RAG + LLM local (Ollama)
 Para cada pergunta:
     1. Busca os chunks relevantes no ChromaDB (retrieval)
     2. Monta o prompt com os trechos como contexto
-    3. Chama o Qwen2.5:7b-instruct via Ollama (100% local)
+    3. Chama o Qwen3:8b via Ollama (100% local)
     4. Retorna DUAS saídas:
         - debug: prompt completo + chunks usados
         - resposta: texto final gerado pela LLM
+
+─── Histórico de ajustes de modelo ───────────────────────────────────────────
+
+MODELO_LLM:
+    Tentativa 1 — qwen2.5:7b-instruct: modelo inicial, funcionou bem para
+        perguntas simples. Recomendado pelo professor para testes.
+    Tentativa 2 — qwen3:8b: geração mais nova, melhor raciocínio. Falhou com
+        erro "model requires more system memory (4.0 GiB) than is available"
+        — a RAM do sistema estava esgotada por outros processos do Windows.
+        Resolvido encerrando processos pesados; CUDA_VISIBLE_DEVICES="" que
+        forçava os embeddings na CPU também foi removido, liberando RAM.
+    Valor atual — qwen3:8b: cabe com folga no sistema após a limpeza de RAM.
+        RTX 4060 Ti 8 GB: e5-large (1.1 GB) + cross-encoder (0.2 GB) +
+        qwen3:8b (5.2 GB) = ~6.5 GB VRAM. Thinking desabilitado via think=False.
+
+THINK (modo de raciocínio do Qwen3):
+    O Qwen3 tem um modo "thinking" que gera tokens internos de raciocínio
+    (<think>...</think>) antes da resposta final. Para RAG factual, esse modo
+    é contraproducente: deixa a resposta mais lenta sem ganho de qualidade,
+    e pode fazer a LLM "raciocinar" além do contexto fornecido e alucinar.
+    Desabilitado via think=False na chamada ao Ollama.
 
 Execute para testar:
     python -m api.generator
@@ -25,7 +46,7 @@ logger = get_logger(__name__)
 # ── Configurações ─────────────────────────────────────────────────────────────
 
 OLLAMA_URL  = "http://localhost:11434/api/generate"
-MODELO_LLM  = "qwen2.5:7b-instruct"
+MODELO_LLM  = "qwen3:8b"
 
 # Temperatura baixa = respostas mais factuais, menos criativas
 # 0.1 é conservador — reduz chance de alucinação
@@ -33,6 +54,10 @@ TEMPERATURE = 0.1
 
 # Máximo de tokens na resposta — evita respostas infinitas
 MAX_TOKENS  = 1024
+
+# Desabilita o modo de raciocínio (chain-of-thought) do Qwen3 —
+# para RAG factual queremos resposta direta, não devagar com <think>
+THINK = False
 
 
 # ── Templates de prompt ───────────────────────────────────────────────────────
@@ -43,7 +68,7 @@ REGRAS:
 1. Use APENAS as informações presentes nos trechos abaixo para responder.
 2. Cite sempre: (Documento, página X) após cada informação usada.
 3. Se os trechos contiverem a informação, RESPONDA com ela — não diga que não está coberta.
-4. Só diga "Esta informação não está coberta pelos documentos disponíveis." se os trechos realmente não contiverem nada relacionado à pergunta.
+4. Só diga "Esta informação não está coberta pelos documentos disponíveis. Tente reformular a pergunta." se os trechos realmente não contiverem nada relacionado à pergunta.
 5. NUNCA invente dados, números ou fatos que não estejam nos trechos.
 
 TRECHOS DOS DOCUMENTOS:
@@ -53,7 +78,7 @@ PERGUNTA: {pergunta}
 
 RESPOSTA (baseada apenas nos trechos acima):"""
 
-PROMPT_SEM_CONTEXTO = """Esta informação não está coberta pelos documentos disponíveis.
+PROMPT_SEM_CONTEXTO = """Esta informação não está coberta pelos documentos disponíveis. Tente reformular a pergunta.
 
 Os documentos indexados tratam de desenvolvimento econômico e social do Paraná (IPARDES). Sua pergunta não encontrou trechos relevantes nesses documentos."""
 
@@ -111,6 +136,7 @@ def _chamar_ollama(prompt: str) -> str:
         "model" : MODELO_LLM,
         "prompt": prompt,
         "stream": False,
+        "think" : THINK,
         "options": {
             "temperature": TEMPERATURE,
             "num_predict": MAX_TOKENS,
@@ -118,7 +144,7 @@ def _chamar_ollama(prompt: str) -> str:
     }
 
     try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=120)
+        response = requests.post(OLLAMA_URL, json=payload, timeout=300)
         if response.status_code != 200:
             raise RuntimeError(f"Ollama erro {response.status_code}: {response.text}")
         return response.json()["response"].strip()
@@ -127,7 +153,7 @@ def _chamar_ollama(prompt: str) -> str:
             "Ollama não está rodando. Execute 'ollama serve' no terminal."
         )
     except requests.exceptions.Timeout:
-        raise RuntimeError("Timeout: o Ollama demorou mais de 120s para responder.")
+        raise RuntimeError("Timeout: o Ollama demorou mais de 300s para responder.")
 
 
 # ── Pipeline principal ────────────────────────────────────────────────────────
@@ -140,6 +166,7 @@ class GeradorRAG:
     def __init__(self):
         self.buscador = BuscadorRAG()
         self.rerankador = RerankadorRAG()
+
     def responder(self, pergunta: str) -> RespostaRAG:
         """
         Gera uma resposta para a pergunta usando RAG.
@@ -179,7 +206,7 @@ class GeradorRAG:
         resposta = _chamar_ollama(prompt_final)
         # Pós-processamento: remove o fallback "não coberta" se a LLM já respondeu
         # Só remove se houver conteúdo real além da frase de fallback
-        FRASE_FALLBACK = "Esta informação não está coberta pelos documentos disponíveis."
+        FRASE_FALLBACK = "Esta informação não está coberta pelos documentos disponíveis. Tente reformular a pergunta."
         if FRASE_FALLBACK in resposta:
             linhas = [l for l in resposta.split("\n") if FRASE_FALLBACK not in l]
             conteudo_restante = "\n".join(linhas).strip()

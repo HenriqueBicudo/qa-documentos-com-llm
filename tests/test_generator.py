@@ -251,7 +251,7 @@ def test_pos_processamento_remove_fallback_duplicado(gerador_mockado, chunk_pib)
 
     resposta_llm = (
         "O PIB cresceu 2,5% ao ano.\n"
-        "Esta informação não está coberta pelos documentos disponíveis."
+        "Esta informação não está coberta pelos documentos disponíveis. Tente reformular a pergunta."
     )
 
     with patch("api.generator._chamar_ollama", return_value=resposta_llm):
@@ -266,10 +266,10 @@ def test_pos_processamento_preserva_fallback_sozinho(gerador_mockado, chunk_pib)
     ela deve ser mantida — é a resposta correta nesse caso.
     """
     gerador, buscador, rerankador = gerador_mockado
-    buscador.buscar.return_value     = [chunk_pib]
-    rerankador.rerankade.return_value = [chunk_pib]
+    buscador.buscar.return_value      = [chunk_pib]
+    rerankador.rerankear.return_value = [chunk_pib]
 
-    resposta_llm = "Esta informação não está coberta pelos documentos disponíveis."
+    resposta_llm = "Esta informação não está coberta pelos documentos disponíveis. Tente reformular a pergunta."
 
     with patch("api.generator._chamar_ollama", return_value=resposta_llm):
         resultado = gerador.responder("PIB?")

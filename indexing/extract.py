@@ -58,8 +58,7 @@ def pagina_e_valida(texto: str) -> bool:
     if texto_limpo.count("....") > 5:
         return False
   
-    linhas = texto_limpo.split()
-     # Ficha técnica: muitas linhas com " - " (cargo - nome)
+    # Ficha técnica: muitas linhas com " - " (cargo - nome)
     linhas_com_traco = sum(1 for l in texto_limpo.split("\n") if " - " in l)
     if linhas_com_traco > 6:
         return False
@@ -138,26 +137,16 @@ def extrair_todos(pdfs: dict[str, Path]) -> tuple[list[dict], list[dict]]:
                     paginas_validas += 1
 
             # ── Tabelas estruturadas ───────────────────────────────────────
-            for tabela in doc.tables:
-                if tabela and len(tabela) >= 2:
-                    # Primeira linha é o cabeçalho, demais são dados
-                    cabecalho = [str(c).strip() if c else "" for c in tabela[0]]
-                    linhas = [
-                        {
-                            cabecalho[i]: str(linha[i]).strip() if linha[i] else ""
-                            for i in range(min(len(cabecalho), len(linha)))
-                            if cabecalho[i]
-                        }
-                        for linha in tabela[1:]
-                    ]
-                    linhas = [l for l in linhas if any(v for v in l.values())]
-
-                    if linhas:
-                        todas_tabelas.append({
-                            "doc"   : nome_doc,
-                            "pagina": doc.page,
-                            "tabela": linhas,
-                        })
+            # Com Docling, doc.tables já são strings markdown — sem conversão.
+            # Antes (pdfplumber + camelot): era necessário parsear manualmente
+            # cabeçalhos e linhas de listas de listas, convertendo para dicts.
+            for tabela_md in doc.tables:
+                if tabela_md.strip():
+                    todas_tabelas.append({
+                        "doc"   : nome_doc,
+                        "pagina": doc.page,
+                        "tabela": tabela_md,
+                    })
 
         logger.info(f"  → {paginas_validas} páginas válidas | {len(todas_tabelas)} tabelas acumuladas")
 

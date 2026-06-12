@@ -16,8 +16,8 @@ Modelo escolhido: cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
     - Mencionado diretamente no anexo do professor
 
 Fluxo:
-    1. BuscadorRAG retorna top-7 chunks por similaridade de cosseno
-    2. RerankadorRAG repontua todos os 7 com o cross-encoder
+    1. BuscadorRAG retorna top-12 chunks por similaridade de cosseno
+    2. RerankadorRAG repontua todos os 12 com o cross-encoder
     3. Retorna os top-3 mais relevantes segundo o cross-encoder
     4. Esses 3 vão pro prompt da LLM
 
